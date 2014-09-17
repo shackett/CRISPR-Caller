@@ -10,6 +10,8 @@ if(!all(c("sangerseqR", "seqinr") %in% rownames(installed.packages()))){
   biocLite("sangerseqR")
   biocLite("seqinr")
   biocLite("org.Hs.eg.db")
+  biocLite("biomaRt")
+
 }
 
 library(sangerseqR)
@@ -104,6 +106,19 @@ if(!file.exists("humanTranscript200bpFlanking.Rdata")){
   load("humanTranscript200bpFlanking.Rdata")
 }
 
+library(biomaRt)
+ensembl = useMart("ensembl")
+listDatasets(ensembl)
+ensembl = useMart("ensembl",dataset="hsapiens_gene_ensembl")
+getGene("ENSG00000000005", type = "entrezgene", mart = ensembl)
+
+listAttributes(ensembl,page="sequences")
+genes = getBM(
+  attributes=c("gene_exon_intron","ensembl_gene_id","hgnc_symbol","chromosome_name","start_position","end_position"),
+  filters=c("chromosome_name","start","end"),
+  values=list("1",231500000,231800000), mart=ensembl
+)
+
 # Format IUPAC map from Biostrings
 
 IUPAC <- melt(lapply(IUPAC_CODE_MAP, function(x){strsplit(x, split = '')}))
@@ -122,6 +137,16 @@ for(hetNuc in rownames(IUPAC)[rowSums(IUPAC) == 2]){
 
 # Standard cost of match and mismatch
 compMat <- nucleotideSubstitutionMatrix(match = 1, mismatch = -8, baseOnly = F) 
+
+test_gene <- paste(c(rep("C", times = 50), rep("T", times = 50), rep("C", times = 50), rep("T", times = 50), rep("C", times = 50)), collapse = "")
+test_query <- paste(c(rep("C", times = 75), rep("A", times = 50), rep("C", times = 75)), collapse = "")
+test_align <- pairwiseAlignment(test_gene, test_query, type = "global")
+
+
+
+test_align <- pairwiseAlignment(test_query, test_gene, type = "global")
+consensusString(test_align)
+writePairwiseAlignments(test_align)
 
 
 
@@ -160,8 +185,20 @@ for(an_ABIfile in ABIfiles){
   # Map this offset sequence back to the gene using a standard substitution matrix
   
   # Determine quality of sanger calls
-  
-  fluoroCounts <- traceMatrix(ABIfile)[peakPosMatrix(ABIfile)[,1],]
+  peak_position_matrix <- melt(hetcalls@peakPosMatrix)
+  colnames(peak_position_matrix) <- c("Position", "Base", "Trace_position")
+  peak_position_matrix <- data.table(peak_position_matrix)
+  peak_position_matrix$I <- sapply(1:nrow(peak_position_matrix), function(i){
+    if(is.na(peak_position_matrix$Trace_position[i])){
+      peak_region <- peak_position_matrix$Trace_position[peak_position_matrix$Position == peak_position_matrix$Position[i]]
+      peak_region <- peak_region[!is.na(peak_region)]
+      max(hetcalls@traceMatrix[min(peak_region):max(peak_region),peak_position_matrix$Base[i]])
+    }else{
+      hetcalls@traceMatrix[peak_position_matrix$Trace_position[i], peak_position_matrix$Base[i]]
+    }
+    
+  })
+  fluoroCounts <- acast(peak_position_matrix, Position ~ Base, value.var = "I")
   # As a quality score - Sum the two greatest counts and divide by the sum of the lower two counts
   fluoroCounts <- fluoroCounts + 1
   sQS <- apply(fluoroCounts, 1, function(i){
@@ -176,22 +213,26 @@ for(an_ABIfile in ABIfiles){
   GlobalDel@pattern@indel[[1]]
   GlobalDel@subject@indel[[1]]
   
-  alleleAseq <- pairwiseAlignment(gene_sequence, DNAString(consensusString(GlobalDel)), type = "local", gapExtension = -3, gapOpening = -50)
-  writePairwiseAlignments(alleleAseq)
+  #alleleAseq <- pairwiseAlignment(DNAString(consensusString(GlobalDel)), gene_sequence, type = "local", gapExtension = -3, gapOpening = -50)
+  #writePairwiseAlignments(alleleAseq)
   
   # Call the second allele
+  if(nchar(consensusString(GlobalDel)) != nchar(hetCode)){
+    stop("Sequence is misaligned to sanger")
+  }
   
   inferredComplement <- haplotypeSubtract(consensusString(GlobalDel), hetCode)
   inferredMap <- pairwiseAlignment(gene_sequence, inferredComplement, type = "local-global", substitutionMatrix = compMat, gapExtension = -8, gapOpening = -50)
+  
   inferredMap@pattern@indel[[1]]
   inferredMap@subject@indel[[1]]
   
-  alleleBseq <- pairwiseAlignment(gene_sequence, DNAString(consensusString(inferredMap)), type = "local", gapExtension = -3, gapOpening = -50)
-  writePairwiseAlignments(alleleBseq)
+  #alleleBseq <- pairwiseAlignment(gene_sequence, DNAString(consensusString(inferredMap)), type = "local", gapExtension = -3, gapOpening = -50)
+  #writePairwiseAlignments(alleleBseq)
   
-  tmp <- DNAStringSet(c(consensusString(GlobalDel), consensusString(inferredMap)))
-  tmp2 <- pairwiseAlignment(tmp, gene_sequence, type = "local", gapExtension = -3, gapOpening = -50)
-  writePairwiseAlignments(tmp2)
+  stringSummary <- DNAStringSet(c(consensusString(GlobalDel), consensusString(inferredMap)))
+  consensusToGene <- pairwiseAlignment(stringSummary, gene_sequence, type = "local", gapExtension = -3, gapOpening = -50)
+  writePairwiseAlignments(consensusToGene)
   
   compareStrings(tmp2)
   
