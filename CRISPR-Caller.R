@@ -17,6 +17,8 @@ library(seqinr)
 library(org.Hs.eg.db)
 
 library(reshape2)
+library(zoo)
+library(data.table)
 
 ###### Functions ########
 
@@ -111,12 +113,14 @@ rownames(IUPAC) <- IUPAC$IUPAC_base; IUPAC <- IUPAC[,-1]
 
 # substitution cost matrices
 
+# HetMat = matrix which allows alignment of heterozygous sequences to reference - e.g. A-A = M-A = M-C
 hetMat <- nucleotideSubstitutionMatrix(match = 1, mismatch = -5, baseOnly = F)
 for(hetNuc in rownames(IUPAC)[rowSums(IUPAC) == 2]){
   hetMat[,hetNuc][names(IUPAC[rownames(IUPAC) == hetNuc,])[IUPAC[rownames(IUPAC) == hetNuc,] == 1]] <- 2
   hetMat[hetNuc,][names(IUPAC[rownames(IUPAC) == hetNuc,])[IUPAC[rownames(IUPAC) == hetNuc,] == 1]] <- 2
 }
 
+# Standard cost of match and mismatch
 compMat <- nucleotideSubstitutionMatrix(match = 1, mismatch = -8, baseOnly = F) 
 
 
@@ -124,7 +128,7 @@ compMat <- nucleotideSubstitutionMatrix(match = 1, mismatch = -8, baseOnly = F)
 ##### Iterate through ABIfiles and call indels #####
 
 ABIfiles <- list.files("ABIfiles")
-an_ABIfile <- ABIfiles[1]
+an_ABIfile <- ABIfiles[3]
 for(an_ABIfile in ABIfiles){
   
   ### Find the sequence of the wild-type gene ###
@@ -147,6 +151,7 @@ for(an_ABIfile in ABIfiles){
   
   ### Load sanger file and find regions of homo/heterozygocity ###
   ABIfile <- readsangerseq(paste0("ABIfiles/", an_ABIfile))
+  
   hetcalls <- makeBaseCalls(ABIfile, ratio = 0.33)
   hetCode <- convert2IUPAC(hetcalls, returnType = "code") # convert sanger sequence to indicate degenerate bases
   
@@ -178,8 +183,8 @@ for(an_ABIfile in ABIfiles){
   
   inferredComplement <- haplotypeSubtract(consensusString(GlobalDel), hetCode)
   inferredMap <- pairwiseAlignment(gene_sequence, inferredComplement, type = "local-global", substitutionMatrix = compMat, gapExtension = -8, gapOpening = -50)
-  inferredMap@pattern@indel
-  inferredMap@subject@indel
+  inferredMap@pattern@indel[[1]]
+  inferredMap@subject@indel[[1]]
   
   alleleBseq <- pairwiseAlignment(gene_sequence, DNAString(consensusString(inferredMap)), type = "local", gapExtension = -3, gapOpening = -50)
   writePairwiseAlignments(alleleBseq)
@@ -188,10 +193,36 @@ for(an_ABIfile in ABIfiles){
   tmp2 <- pairwiseAlignment(tmp, gene_sequence, type = "local", gapExtension = -3, gapOpening = -50)
   writePairwiseAlignments(tmp2)
   
+  compareStrings(tmp2)
   
   # Call both mutant alleles and then align each to WT
   # Determine quality of sanger sequence 
   # Flag if one allele is WT
+  an_Alignment <- GlobalDel
+  an_Alignment <- inferredMap
+  QS = sQS
+  
+  
+  
+  filter_indels <- function(an_Alignment, QS){
+    # insertion and deletion are reversed because functions are w.r.t. gene sequence
+    allele_deletions <- insertion(an_Alignment)[[1]]
+    allele_insertions <- deletion(an_Alignment)[[1]]
+    
+    allele_called_indels <- NULL
+    if(length(allele_deletions@start) != 0){
+      allele_called_indels <- rbind(allele_called_indels, data.frame(type = "deletion", allele_deletions))
+    }
+    if(length(allele_insertions@start) != 0){
+      allele_called_indels <- rbind(allele_called_indels, data.frame(type = "insertion", allele_insertions))
+    }
+    allele_called_indels <- data.table(allele_called_indels)
+    
+    allele_called_indels[flankingQS := max(1, start - 2):min(nchar(an_Alignment), end + 2)]
+    
+    
+  }
+  
   
   
   
@@ -202,25 +233,6 @@ for(an_ABIfile in ABIfiles){
   chromatogram(hetcalls, showcalls = "both")
   
   
-  # take the early stretch of homozygocity and align to the correct gene (local-global)
-  # read forward to find stretches of WT that 
-  
-  # align @ homozygocity
-  # identify interuption of heterozygocity breakpoint
-  # use n+1 breakpoint to identify the nth indel
-  
-  # if gap at beginning of sanger - insertion
-  # if gap at beginning of genomic - deletion
-  
-  
-  
-  
   
 }
 
-
-
-
-
-
-http://imperialis.inhs.illinois.edu/dmitriev/indel.asp
