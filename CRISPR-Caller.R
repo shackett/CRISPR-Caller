@@ -17,9 +17,10 @@ if(!all(c("sangerseqR", "seqinr") %in% rownames(installed.packages()))){
 library(sangerseqR)
 library(seqinr)
 library(org.Hs.eg.db)
+library(biomaRt)
 
+library(ggplot2)
 library(reshape2)
-library(zoo)
 library(data.table)
 
 ###### Functions ########
@@ -84,40 +85,65 @@ haplotypeSubtract <- function(WT, Het){
   return(DNAString(paste(haplo, collapse = "")))
 }
 
-###### Prep ######
+test_genes <- c("Foxp2", "tp53", "ENSG00000139618", "made_up")
+ensembl = useMart("ensembl",dataset="hsapiens_gene_ensembl")
 
-# Human coding sequences taken from Ensembl CDS dump http://useast.ensembl.org/info/data/ftp/index.html
-# By default saved as .tsv, just altering extension works because it is formatted as a fasta
+query_gene <- test_genes[4]
+find_gene_sequence(query_gene)
 
-if(!file.exists("humanTranscript200bpFlanking.Rdata")){
+find_gene_sequence <- function(query_gene){
   
-  # If not previously performed then turn the fasta file into a list and indexing table so that future loading is faster
-  # This is still slow because of the large object which must be loaded
+  require(biomaRt)
   
-  human_sequences <- read.fasta('humanTranscript200bpFlanking.fasta')
-  seq_attrs <- t(sapply(1:length(human_sequences), function(x){
-    seq_attr <- strsplit(getAnnot(human_sequences[[x]]), split = '[>\\|]')[[1]][-1]
-    data.frame(index = x, ensemblGene = seq_attr[1], common = seq_attr[3])
-  }, simplify = T))
-  seq_attrs <- as.data.frame(apply(seq_attrs, c(1,2), function(x){x[[1]]}))
-  save(human_sequences, seq_attrs, file = "humanTranscript200bpFlanking.Rdata")
+  if(length(query_gene) != 1){stop("Query a single gene")}
   
-}else{
-  load("humanTranscript200bpFlanking.Rdata")
+  genes = getBM(
+    attributes=list("gene_exon_intron", "ensembl_gene_id","hgnc_symbol"),
+    filters="hgnc_symbol",
+    values=query_gene, mart=ensembl
+  )
+  if(nrow(genes) != 0){
+    return(genes)
+  }
+  
+  genes = getBM(
+    attributes=list("gene_exon_intron", "ensembl_gene_id","hgnc_symbol"),
+    filters="ensembl_gene_id",
+    values=query_gene, mart=ensembl
+  )
+  if(nrow(genes) != 0){
+    return(genes)
+  }
+  
+  warning(query_gene, " does not match any human gene symbol or ensembl gene ID")
+  return(NULL)
 }
 
-library(biomaRt)
-ensembl = useMart("ensembl")
-listDatasets(ensembl)
-ensembl = useMart("ensembl",dataset="hsapiens_gene_ensembl")
-getGene("ENSG00000000005", type = "entrezgene", mart = ensembl)
+filter_indels <- function(an_Alignment, QS){
+  # insertion and deletion are reversed because functions are w.r.t. gene sequence
+  allele_deletions <- insertion(an_Alignment)[[1]]
+  allele_insertions <- deletion(an_Alignment)[[1]]
+  
+  allele_called_indels <- NULL
+  if(length(allele_deletions@start) != 0){
+    allele_called_indels <- rbind(allele_called_indels, data.frame(type = "deletion", allele_deletions))
+  }
+  if(length(allele_insertions@start) != 0){
+    allele_called_indels <- rbind(allele_called_indels, data.frame(type = "insertion", allele_insertions))
+  }
+  allele_called_indels <- data.table(allele_called_indels)
+  # nucleotide numbering will correspond directly to position in QS vector
+  
+  indel_summary <- allele_called_indels[,list(localQC = median(QS[c(max(1, start - 2):min(an_Alignment@subject@range@width, end + 2))])),by = c("type", "start", "end", "width")]
+  indel_summary[,verdict := ifelse(localQC < 30 | width < 5, "Misalignment", "True Indel")]
+  
+  if(!any(indel_summary$verdict == "True Indel")){
+    warning("No probable indel located")
+  }
+  return(indel_summary)
+}
 
-listAttributes(ensembl,page="sequences")
-genes = getBM(
-  attributes=c("gene_exon_intron","ensembl_gene_id","hgnc_symbol","chromosome_name","start_position","end_position"),
-  filters=c("chromosome_name","start","end"),
-  values=list("1",231500000,231800000), mart=ensembl
-)
+###### Prep ######
 
 # Format IUPAC map from Biostrings
 
@@ -138,41 +164,46 @@ for(hetNuc in rownames(IUPAC)[rowSums(IUPAC) == 2]){
 # Standard cost of match and mismatch
 compMat <- nucleotideSubstitutionMatrix(match = 1, mismatch = -8, baseOnly = F) 
 
-test_gene <- paste(c(rep("C", times = 50), rep("T", times = 50), rep("C", times = 50), rep("T", times = 50), rep("C", times = 50)), collapse = "")
-test_query <- paste(c(rep("C", times = 75), rep("A", times = 50), rep("C", times = 75)), collapse = "")
-test_align <- pairwiseAlignment(test_gene, test_query, type = "global")
-
-
-
-test_align <- pairwiseAlignment(test_query, test_gene, type = "global")
-consensusString(test_align)
-writePairwiseAlignments(test_align)
+#test_gene <- paste(c(rep("C", times = 50), rep("T", times = 50), rep("C", times = 50), rep("T", times = 50), rep("C", times = 50)), collapse = "")
+#test_query <- paste(c(rep("C", times = 75), rep("A", times = 50), rep("C", times = 75)), collapse = "")
+#test_align <- pairwiseAlignment(test_gene, test_query, type = "global")
+#test_align <- pairwiseAlignment(test_query, test_gene, type = "global")
+#consensusString(test_align)
+#writePairwiseAlignments(test_align)
 
 
 
 ##### Iterate through ABIfiles and call indels #####
 
+callAlleles <- function(inputFilePath, outputDirectoryPath, outputFile = NULL){
+  
+  
+  
+  
+  
+  
+  
+  
+}
+
 ABIfiles <- list.files("ABIfiles")
-an_ABIfile <- ABIfiles[3]
 for(an_ABIfile in ABIfiles){
   
   ### Find the sequence of the wild-type gene ###
   gene <- strsplit(an_ABIfile, split = '[-_]')[[1]][2]
-  gene_attr <- seq_attrs[seq_attrs$common == gene,]
+  gene_sequence_matches <- find_gene_sequence(gene)
+  if(is.null(gene_sequence_matches)){
+    warning("A gene sequence could not be located for", an_ABIfile)
+    next
+  }
   
-  if(nrow(gene_attr) == 0){
-    gene_sequence <- NA
-    warning("Did not find gene: ", gene)
-  }else if(nrow(gene_attr) == 1){
-    gene_sequence <- human_sequences[[as.numeric(gene_attr$index)]]
+  if(nrow(gene_sequence_matches) == 1){
+    gene_sequence <- gene_sequence_matches$gene_exon_intron
   }else{
-    match_lengths <- sapply(as.numeric(gene_attr$index), function(i){
-      summary(human_sequences[[as.numeric(gene_attr$index)]])$length
-    })
-    gene_sequence <- human_sequences[[as.numeric(gene_attr$index)[which.max(match_lengths)]]]
+    gene_sequence <- gene_sequence_matches$gene_exon_intron[which.max(nchar(gene_sequence_matches$gene_exon_intron))]
     warning(gene, " is degenerate with ", nrow(gene_attr), " sequence matches (taking the longest)")
   }
-  gene_sequence <- DNAString(paste(getSequence(gene_sequence), collapse = ""))
+  gene_sequence <- DNAString(gene_sequence)
   
   ### Load sanger file and find regions of homo/heterozygocity ###
   ABIfile <- readsangerseq(paste0("ABIfiles/", an_ABIfile))
@@ -204,17 +235,11 @@ for(an_ABIfile in ABIfiles){
   sQS <- apply(fluoroCounts, 1, function(i){
     sum(sort(i)[3:4]) / sum(sort(i)[1:2])
   })
-  plot(log2(sQS))
+  print(qplot(y = log10(sQS), x = 1:length(sQS)) + geom_hline(y = log10(30), size = 3, col = "RED"))
   
-  # Call the first haplotype
+  # Call the first allele
   
   GlobalDel <- pairwiseAlignment(gene_sequence, DNAString(hetCode), type = "local-global", substitutionMatrix = hetMat, gapExtension = -8, gapOpening = -50)
-  # call deletions on copy A
-  GlobalDel@pattern@indel[[1]]
-  GlobalDel@subject@indel[[1]]
-  
-  #alleleAseq <- pairwiseAlignment(DNAString(consensusString(GlobalDel)), gene_sequence, type = "local", gapExtension = -3, gapOpening = -50)
-  #writePairwiseAlignments(alleleAseq)
   
   # Call the second allele
   if(nchar(consensusString(GlobalDel)) != nchar(hetCode)){
@@ -224,56 +249,16 @@ for(an_ABIfile in ABIfiles){
   inferredComplement <- haplotypeSubtract(consensusString(GlobalDel), hetCode)
   inferredMap <- pairwiseAlignment(gene_sequence, inferredComplement, type = "local-global", substitutionMatrix = compMat, gapExtension = -8, gapOpening = -50)
   
-  inferredMap@pattern@indel[[1]]
-  inferredMap@subject@indel[[1]]
-  
-  #alleleBseq <- pairwiseAlignment(gene_sequence, DNAString(consensusString(inferredMap)), type = "local", gapExtension = -3, gapOpening = -50)
-  #writePairwiseAlignments(alleleBseq)
-  
   stringSummary <- DNAStringSet(c(consensusString(GlobalDel), consensusString(inferredMap)))
   consensusToGene <- pairwiseAlignment(stringSummary, gene_sequence, type = "local", gapExtension = -3, gapOpening = -50)
-  writePairwiseAlignments(consensusToGene)
+  #writePairwiseAlignments(consensusToGene, file = "")
   
-  compareStrings(tmp2)
-  
-  # Call both mutant alleles and then align each to WT
-  # Determine quality of sanger sequence 
-  # Flag if one allele is WT
-  an_Alignment <- GlobalDel
-  an_Alignment <- inferredMap
-  QS = sQS
-  
-  
-  
-  filter_indels <- function(an_Alignment, QS){
-    # insertion and deletion are reversed because functions are w.r.t. gene sequence
-    allele_deletions <- insertion(an_Alignment)[[1]]
-    allele_insertions <- deletion(an_Alignment)[[1]]
-    
-    allele_called_indels <- NULL
-    if(length(allele_deletions@start) != 0){
-      allele_called_indels <- rbind(allele_called_indels, data.frame(type = "deletion", allele_deletions))
-    }
-    if(length(allele_insertions@start) != 0){
-      allele_called_indels <- rbind(allele_called_indels, data.frame(type = "insertion", allele_insertions))
-    }
-    allele_called_indels <- data.table(allele_called_indels)
-    
-    allele_called_indels[flankingQS := max(1, start - 2):min(nchar(an_Alignment), end + 2)]
-    
-    
-  }
-  
-  
-  
-  
-  
-  hetMatch  <- pairwiseAlignment(hetCode, WTaligned, type = "local", substitutionMatrix = hetMat, gapExtension = -0.1)
-  pairwiseAlignment(hetCode, WTaligned, type = "local", substitutionMatrix = hetMat)
-  
-  chromatogram(hetcalls, showcalls = "both")
-  
-  
+  cat(an_ABIfile)
+  cat("\n------------------------------------------\n")
+  print(filter_indels(GlobalDel, sQS), digits = 2)
+  cat("------------------------------------------\n")
+  print(filter_indels(inferredMap, sQS), digits = 2)
+  cat('==========================================\n\n')
   
 }
 
