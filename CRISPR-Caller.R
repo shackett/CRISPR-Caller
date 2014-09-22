@@ -85,11 +85,10 @@ haplotypeSubtract <- function(WT, Het){
   return(DNAString(paste(haplo, collapse = "")))
 }
 
-test_genes <- c("Foxp2", "tp53", "ENSG00000139618", "made_up")
-ensembl = useMart("ensembl",dataset="hsapiens_gene_ensembl")
-
-query_gene <- test_genes[4]
-find_gene_sequence(query_gene)
+#test_genes <- c("Foxp2", "tp53", "ENSG00000139618", "made_up")
+#ensembl = useMart("ensembl",dataset="hsapiens_gene_ensembl")
+#query_gene <- test_genes[4]
+#find_gene_sequence(query_gene)
 
 find_gene_sequence <- function(query_gene){
   
@@ -132,6 +131,12 @@ filter_indels <- function(an_Alignment, QS){
     allele_called_indels <- rbind(allele_called_indels, data.frame(type = "insertion", allele_insertions))
   }
   allele_called_indels <- data.table(allele_called_indels)
+  
+  if(nrow(allele_called_indels) == 0){
+    warning("No called indels")
+    return(NULL)
+  }
+  
   # nucleotide numbering will correspond directly to position in QS vector
   
   indel_summary <- allele_called_indels[,list(localQC = median(QS[c(max(1, start - 2):min(an_Alignment@subject@range@width, end + 2))])),by = c("type", "start", "end", "width")]
@@ -175,22 +180,18 @@ compMat <- nucleotideSubstitutionMatrix(match = 1, mismatch = -8, baseOnly = F)
 
 ##### Iterate through ABIfiles and call indels #####
 
-callAlleles <- function(inputFilePath, outputDirectoryPath, outputFile = NULL){
-  
-  
-  
-  
-  
-  
-  
+ABIfiles <- list.files("ABIfiles")
+for(an_ABIfile in ABIfiles){
+  allele_call <- callAlleles(gene = strsplit(an_ABIfile, split = '_')[[1]][2],
+                             inputFilePath = file.path('ABIfiles', an_ABIfile), 
+                             outputDirectoryPath = file.path("Output"), outputFilePrefix = strsplit(an_ABIfile, split = '\\.')[[1]][1])
   
 }
 
-ABIfiles <- list.files("ABIfiles")
-for(an_ABIfile in ABIfiles){
+callAlleles <- function(gene, inputFilePath, outputDirectoryPath = NULL, outputFilePrefix = NULL){
   
   ### Find the sequence of the wild-type gene ###
-  gene <- strsplit(an_ABIfile, split = '[-_]')[[1]][2]
+  
   gene_sequence_matches <- find_gene_sequence(gene)
   if(is.null(gene_sequence_matches)){
     warning("A gene sequence could not be located for", an_ABIfile)
@@ -206,7 +207,8 @@ for(an_ABIfile in ABIfiles){
   gene_sequence <- DNAString(gene_sequence)
   
   ### Load sanger file and find regions of homo/heterozygocity ###
-  ABIfile <- readsangerseq(paste0("ABIfiles/", an_ABIfile))
+  
+  ABIfile <- readsangerseq(inputFilePath)
   
   hetcalls <- makeBaseCalls(ABIfile, ratio = 0.33)
   hetCode <- convert2IUPAC(hetcalls, returnType = "code") # convert sanger sequence to indicate degenerate bases
@@ -235,7 +237,6 @@ for(an_ABIfile in ABIfiles){
   sQS <- apply(fluoroCounts, 1, function(i){
     sum(sort(i)[3:4]) / sum(sort(i)[1:2])
   })
-  print(qplot(y = log10(sQS), x = 1:length(sQS)) + geom_hline(y = log10(30), size = 3, col = "RED"))
   
   # Call the first allele
   
@@ -251,7 +252,6 @@ for(an_ABIfile in ABIfiles){
   
   stringSummary <- DNAStringSet(c(consensusString(GlobalDel), consensusString(inferredMap)))
   consensusToGene <- pairwiseAlignment(stringSummary, gene_sequence, type = "local", gapExtension = -3, gapOpening = -50)
-  #writePairwiseAlignments(consensusToGene, file = "")
   
   cat(an_ABIfile)
   cat("\n------------------------------------------\n")
@@ -260,5 +260,18 @@ for(an_ABIfile in ABIfiles){
   print(filter_indels(inferredMap, sQS), digits = 2)
   cat('==========================================\n\n')
   
+  if(!is.null(outputDirectoryPath)){
+    if(is.null(outputFilePrefix)){
+      outputFilePrefix <- gene
+    }
+    writePairwiseAlignments(consensusToGene, file = file.path(outputDirectoryPath, paste0(outputFilePrefix, "--alignment.tsv")))
+    
+    ggsave(qplot(y = log10(sQS), x = 1:length(sQS)) + geom_hline(y = log10(30), size = 3, col = "RED"), 
+    file = file.path(outputDirectoryPath, paste0(outputFilePrefix, "--QC.pdf")), height = 10, width = 10)
+    
+    chromatogram(hetcalls, showcalls = "both", filename = file.path(outputDirectoryPath, paste0(outputFilePrefix, "--chromatogram.pdf")))
+  }
 }
+
+
 
