@@ -1,7 +1,9 @@
 CRISPR-Caller
 =============
 
-A method for confirming CRISPR knockouts of genes from sanger sequencing data. Inputs are:
+A method for confirming CRISPR knockouts of genes from sanger sequencing data. I have not used this method for many typical use cases, so I make no guarantees about its accuracy. 
+
+Inputs are:
 - a gene name (either ensembl or hgnc), only tested for human
 - an .ab1 sanger trace file
 
@@ -18,3 +20,8 @@ General approach is:
 - identify indels of the first allele
 - subtract first allele from degenerate call
 - identify indels of the second allele
+
+Output will be:
+- a chromatogram indicating called homozygous and heterozygous regions
+- a QC file indicating regions of the sanger sequence that are relatively high quality
+- an alignment - calling predicted indels for both alleles
